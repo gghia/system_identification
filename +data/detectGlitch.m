@@ -1,0 +1,79 @@
+function [keepMask, info] = detectGlitch(Cm, opts)
+% DETECTGLITCH Flag the Cm sensor glitch from explicit (hand-verified) intervals.
+% Inputs: Cm is the measured pitching moment, opts selects intervals/policy/window.
+% Outputs: keepMask keeps good samples; info stores the flagged indices and clean Cm.
+
+    if nargin < 2 || isempty(opts), opts = struct(); end
+    if ~isfield(opts, 'policy')    || isempty(opts.policy),    opts.policy = 'drop'; end
+    if ~isfield(opts, 'window')    || isempty(opts.window),    opts.window = 0;      end
+    if ~isfield(opts, 'intervals') || isempty(opts.intervals), opts.intervals = 'hand'; end
+
+    % Hand-verified glitch sample ranges for F16traindata_CMabV_2026.mat,
+    HAND_VERIFIED = [ ...
+        1357 1463; ...
+        1945 2124; ...
+        2558 2765; ...
+        3177 3398; ...
+        3801 3903; ...
+        3987 4027; ...
+        4426 4500; ...
+        5052 5111; ...
+        5679 5727; ...
+        6307 6346; ...
+        6935 6966; ...
+        7564 7587; ...
+        8193 8209; ...
+        8631 8663; ...
+        8826 8829; ...
+        9241 9311; ...
+        9861 9951 ];
+
+    Cm = Cm(:);
+    N  = numel(Cm);
+
+    % resolve the interval table
+    if (ischar(opts.intervals) || isstring(opts.intervals)) ...
+            && strcmpi(string(opts.intervals), "hand")
+        iv = HAND_VERIFIED;
+    elseif isnumeric(opts.intervals) && size(opts.intervals, 2) == 2
+        iv = opts.intervals;
+    else
+        error('data:detectGlitch:badIntervals', ...
+            ['opts.intervals must be ''hand'' or an M-by-2 numeric ' ...
+             'matrix of [k_start k_end] rows.']);
+    end
+    iv = round(iv);
+
+    % flag every sample inside an interval
+    flagged = false(N, 1);
+    for r = 1:size(iv, 1)
+        s = max(1, iv(r,1));  e = min(N, iv(r,2));
+        if e >= s, flagged(s:e) = true; end
+    end
+
+    % Optionally dilate the mask by `window` samples (close 1-2 sample gaps
+    if opts.window > 0
+        flagged = movmax(flagged, 2*opts.window + 1) > 0;
+    end
+
+    keepMask = ~flagged;
+    info.flaggedIdx  = find(flagged);
+    info.intervals   = iv;
+    info.medianValue = median(Cm);
+    info.policy      = opts.policy;
+    info.method      = 'intervals';
+    info.summary = sprintf( ...
+        ['Glitch INTERVAL mode: %d hand-verified ranges, ' ...
+         'flagged %d/%d (%.2f%%) samples; median(Cm)=%.3g.'], ...
+        size(iv,1), numel(info.flaggedIdx), N, ...
+        100*numel(info.flaggedIdx)/N, info.medianValue);
+
+    % Build CmClean. The default (drop) leaves Cm
+    switch lower(opts.policy)
+        case 'drop'
+            info.CmClean = Cm;
+        case 'nan'
+            CmClean = Cm; CmClean(flagged) = NaN;
+            info.CmClean = CmClean;
+    end
+end
